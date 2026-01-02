@@ -45,10 +45,13 @@ sudo ./setup-network-persistent-netplan.sh
 ### 测试连接
 
 ```bash
-# 在 AGX 上测试
+# 在 AGX 上测试网络
 ping -c 3 10.10.99.99   # 测试网关
 ping -c 3 8.8.8.8       # 测试互联网
 ping -c 3 google.com    # 测试DNS
+
+# 从外部网络测试端口转发
+ssh -p 58022 user@LPMU_IP  # SSH 访问 AGX
 ```
 
 ---
@@ -75,6 +78,12 @@ AGX (10.10.99.98)
 - ✓ **自动恢复**：enp2s0 恢复后自动切换回来
 - ✓ **自动配置 NAT**：一键完成路由和NAT配置
 - ✓ **持续监控**：每 30 秒检查网络状态
+
+### 端口转发特性
+
+- 🔌 **SSH 端口转发**：AGX:22 映射到 LPMU:58022
+- 🔌 **端口范围转发**：AGX:58000-58999 映射到 LPMU:58000-58999 (TCP/UDP)
+- 🔒 **远程管理**：通过 `ssh -p 58022 user@LPMU_IP` 访问 AGX
 
 ## 一、LPMU配置（作为网关）
 
@@ -107,11 +116,21 @@ AGX (10.10.99.98)
    - ✓ 配置最优默认路由
    - ✓ 测试互联网连接
    - ✓ **自动配置 NAT 和防火墙规则**
+   - ✓ **自动配置端口转发（SSH:58022, 端口范围:58000-58999）**
 
-5. **在 AGX 上测试**
+5. **在 AGX 上测试网络**
    ```bash
    ping 8.8.8.8
    ping google.com
+   ```
+
+6. **测试端口转发（从外部网络）**
+   ```bash
+   # SSH 访问 AGX
+   ssh -p 58022 user@LPMU_IP
+   
+   # 测试端口范围（例如访问 AGX 上运行在 58080 的服务）
+   curl http://LPMU_IP:58080
    ```
 
 ### 安装为系统服务（推荐）
@@ -165,6 +184,8 @@ sudo ./setup-nat.sh
 - 检测有互联网连接的接口
 - 配置 NAT (MASQUERADE)
 - 配置防火墙规则
+- **配置 SSH 端口转发（AGX:22 -> LPMU:58022）**
+- **配置端口范围转发（AGX:58000-58999 -> LPMU:58000-58999）**
 
 #### `install-smart-route-service.sh`
 - 将脚本安装为 systemd 服务
