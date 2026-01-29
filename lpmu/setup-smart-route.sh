@@ -63,49 +63,98 @@ get_all_interfaces_with_gateway() {
     ip route | grep '^default' | awk '{print $5}' | sort -u
 }
 
-echo "1. 检测所有可用接口..."
+# 获取所有物理网络接口（排除 lo 和虚拟接口）
+get_all_network_interfaces() {
+    ip -o link show | awk -F': ' '{print $2}' | grep -v '^lo$' | grep -v '@' | sort -u
+}
+
+# 获取接口的 IP 地址
+get_ip_address() {
+    local iface=$1
+    ip -4 addr show dev "$iface" 2>/dev/null | grep -oP 'inet \K[0-9.]+' | head -1
+}
+
+# 获取接口状态 (UP/DOWN)
+get_iface_state() {
+    local iface=$1
+    ip link show dev "$iface" 2>/dev/null | grep -q 'state UP' && echo "UP" || echo "DOWN"
+}
+
+echo "1. 检测所有网络接口..."
+ALL_INTERFACES=$(get_all_network_interfaces)
 INTERFACES=$(get_all_interfaces_with_gateway)
-echo "   发现接口: $INTERFACES"
+echo "   发现接口: $ALL_INTERFACES"
 echo ""
 
 # 手动模式
 if [ "$MANUAL_MODE" = true ]; then
-    echo "2. 手动选择模式"
+    echo "2. 手动选择模式 - 检测所有接口..."
     echo ""
     
     # 收集所有接口信息
+    declare -A IFACE_IP
     declare -A IFACE_GATEWAY
     declare -A IFACE_STATUS
+    declare -A IFACE_STATE
     IFACE_LIST=()
     
-    for iface in $INTERFACES; do
-        gateway=$(get_gateway "$iface")
-        if [ -n "$gateway" ]; then
-            IFACE_LIST+=("$iface")
-            IFACE_GATEWAY["$iface"]="$gateway"
-            
-            echo -n "   检测 $iface (网关: $gateway) ... "
-            if test_internet "$iface" "$gateway"; then
-                IFACE_STATUS["$iface"]="✓ 可用"
-                echo "✓ 可用"
+    for iface in $ALL_INTERFACES; do
+        IFACE_LIST+=("$iface")
+        IFACE_STATE["$iface"]=$(get_iface_state "$iface")
+        IFACE_IP["$iface"]=$(get_ip_address "$iface")
+        IFACE_GATEWAY["$iface"]=$(get_gateway "$iface")
+        
+        echo -n "   检测 $iface "
+        echo -n "[${IFACE_STATE[$iface]}]"
+        
+        if [ -n "${IFACE_IP[$iface]}" ]; then
+            echo -n " IP: ${IFACE_IP[$iface]}"
+        else
+            echo -n " IP: 无"
+        fi
+        
+        if [ -n "${IFACE_GATEWAY[$iface]}" ]; then
+            echo -n " 网关: ${IFACE_GATEWAY[$iface]}"
+            echo -n " ... "
+            if test_internet "$iface" "${IFACE_GATEWAY[$iface]}"; then
+                IFACE_STATUS["$iface"]="✓ 可联网"
+                echo "✓ 可联网"
             else
-                IFACE_STATUS["$iface"]="✗ 不可用"
-                echo "✗ 不可用"
+                IFACE_STATUS["$iface"]="✗ 无法联网"
+                echo "✗ 无法联网"
             fi
+        else
+            echo " 网关: 无"
+            IFACE_STATUS["$iface"]="- 无网关"
         fi
     done
     
     if [ ${#IFACE_LIST[@]} -eq 0 ]; then
         echo ""
-        echo "✗ 错误：没有找到配置了网关的接口"
+        echo "✗ 错误：没有找到网络接口"
         exit 1
     fi
     
     echo ""
-    echo "可用接口列表："
+    echo "┌────────────────────────────────────────────────────────────────┐"
+    echo "│                      可用接口列表                              │"
+    echo "├────┬──────────────┬────────┬─────────────────┬─────────────────┤"
+    printf "│ %-2s │ %-12s │ %-6s │ %-15s │ %-15s │\n" "#" "接口" "状态" "IP 地址" "网关"
+    echo "├────┼──────────────┼────────┼─────────────────┼─────────────────┤"
     for i in "${!IFACE_LIST[@]}"; do
         iface="${IFACE_LIST[$i]}"
-        echo "  $((i+1)). $iface - 网关: ${IFACE_GATEWAY[$iface]} - ${IFACE_STATUS[$iface]}"
+        ip_addr="${IFACE_IP[$iface]:-无}"
+        gateway="${IFACE_GATEWAY[$iface]:-无}"
+        state="${IFACE_STATE[$iface]}"
+        printf "│ %-2s │ %-12s │ %-6s │ %-15s │ %-15s │\n" "$((i+1))" "$iface" "$state" "$ip_addr" "$gateway"
+    done
+    echo "└────┴──────────────┴────────┴─────────────────┴─────────────────┘"
+    
+    echo ""
+    echo "连接状态:"
+    for i in "${!IFACE_LIST[@]}"; do
+        iface="${IFACE_LIST[$i]}"
+        echo "  $((i+1)). $iface: ${IFACE_STATUS[$iface]}"
     done
     
     echo ""
@@ -118,6 +167,17 @@ if [ "$MANUAL_MODE" = true ]; then
     
     CHOSEN_IFACE="${IFACE_LIST[$((choice-1))]}"
     CHOSEN_GATEWAY="${IFACE_GATEWAY[$CHOSEN_IFACE]}"
+    
+    if [ -z "$CHOSEN_GATEWAY" ]; then
+        echo ""
+        echo "⚠ 警告: $CHOSEN_IFACE 没有配置网关"
+        read -p "请输入网关地址 (或按回车取消): " manual_gateway
+        if [ -z "$manual_gateway" ]; then
+            echo "✗ 取消操作"
+            exit 1
+        fi
+        CHOSEN_GATEWAY="$manual_gateway"
+    fi
     
     echo ""
     echo "已选择: $CHOSEN_IFACE (网关: $CHOSEN_GATEWAY)"
