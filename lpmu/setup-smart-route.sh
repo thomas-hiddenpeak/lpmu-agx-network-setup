@@ -8,6 +8,32 @@ set -e
 PRIMARY_IFACE="enp2s0"
 TEST_HOST="8.8.8.8"
 TIMEOUT=3
+MANUAL_MODE=false
+
+# 解析命令行参数
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -m|--manual)
+            MANUAL_MODE=true
+            shift
+            ;;
+        -h|--help)
+            echo "用法: $0 [-m|--manual] [-h|--help]"
+            echo ""
+            echo "选项:"
+            echo "  -m, --manual    手动选择网关接口"
+            echo "  -h, --help      显示此帮助信息"
+            echo ""
+            echo "默认行为: 自动检测并选择可用的网关接口"
+            exit 0
+            ;;
+        *)
+            echo "未知选项: $1"
+            echo "使用 -h 或 --help 查看帮助"
+            exit 1
+            ;;
+    esac
+done
 
 echo "=== LPMU 智能路由配置 ==="
 echo ""
@@ -42,8 +68,66 @@ INTERFACES=$(get_all_interfaces_with_gateway)
 echo "   发现接口: $INTERFACES"
 echo ""
 
-# 测试主接口
-echo "2. 测试主接口 $PRIMARY_IFACE..."
+# 手动模式
+if [ "$MANUAL_MODE" = true ]; then
+    echo "2. 手动选择模式"
+    echo ""
+    
+    # 收集所有接口信息
+    declare -A IFACE_GATEWAY
+    declare -A IFACE_STATUS
+    IFACE_LIST=()
+    
+    for iface in $INTERFACES; do
+        gateway=$(get_gateway "$iface")
+        if [ -n "$gateway" ]; then
+            IFACE_LIST+=("$iface")
+            IFACE_GATEWAY["$iface"]="$gateway"
+            
+            echo -n "   检测 $iface (网关: $gateway) ... "
+            if test_internet "$iface" "$gateway"; then
+                IFACE_STATUS["$iface"]="✓ 可用"
+                echo "✓ 可用"
+            else
+                IFACE_STATUS["$iface"]="✗ 不可用"
+                echo "✗ 不可用"
+            fi
+        fi
+    done
+    
+    if [ ${#IFACE_LIST[@]} -eq 0 ]; then
+        echo ""
+        echo "✗ 错误：没有找到配置了网关的接口"
+        exit 1
+    fi
+    
+    echo ""
+    echo "可用接口列表："
+    for i in "${!IFACE_LIST[@]}"; do
+        iface="${IFACE_LIST[$i]}"
+        echo "  $((i+1)). $iface - 网关: ${IFACE_GATEWAY[$iface]} - ${IFACE_STATUS[$iface]}"
+    done
+    
+    echo ""
+    read -p "请选择接口编号 [1-${#IFACE_LIST[@]}]: " choice
+    
+    if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt ${#IFACE_LIST[@]} ]; then
+        echo "✗ 无效的选择"
+        exit 1
+    fi
+    
+    CHOSEN_IFACE="${IFACE_LIST[$((choice-1))]}"
+    CHOSEN_GATEWAY="${IFACE_GATEWAY[$CHOSEN_IFACE]}"
+    
+    echo ""
+    echo "已选择: $CHOSEN_IFACE (网关: $CHOSEN_GATEWAY)"
+    echo ""
+fi
+
+# 自动模式
+if [ "$MANUAL_MODE" = false ]; then
+    # 测试主接口
+    echo "2. 测试主接口 $PRIMARY_IFACE..."
 PRIMARY_GATEWAY=$(get_gateway "$PRIMARY_IFACE")
 
 if [ -n "$PRIMARY_GATEWAY" ]; then
@@ -86,6 +170,7 @@ if [ -z "$CHOSEN_IFACE" ]; then
         fi
     done
     echo ""
+fi
 fi
 
 # 如果找到可用接口，配置路由
